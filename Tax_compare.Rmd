@@ -1,0 +1,304 @@
+---
+title: "TAX_Compare"
+author: "Keyu Nie"
+date: "11/4/2017"
+output: html_document
+runtime: shiny
+---
+#1 New Tax Rate
+-------
+The House plan creates the following tax chart.
+
+**Income Tax Rate** ||**Income Levels for Those Filing As:**| 
+:-----:|:-----:|:-----:|:-----:
+Current|Tax Act|Single|Married-Joint
+10 - 15%|12%|$0-$44,999|$0 - $89,999
+25 - 28%|25%|$45,000 - $199,999 |$90,000 - $259,999
+28 - 39.6%|35%|$200,000 - $499,999|$260,000 - $999,999
+39.60%|39.60%|$500,000+|$1M+
+
+```{r, include=FALSE}
+library(ggplot2)
+#Here taxble_income a tax term.Return the old way of tax calculation (not consider AMT) 
+tax_calculator<-function(taxable_income, bracket, rate){
+  sum(diff(pmin(taxable_income, bracket)) * rate)
+}
+old_tax<-function(taxable_income, joint = TRUE){ 
+rate= c(0.1, 0.15, 0.25, 0.28, 0.33, 0.35, 0.396)
+if (joint){
+  bracket<-c(0, 18650, 75900, 153100, 233350, 416700,  470700, Inf)
+}
+else{
+  bracket<-c(0, 9325, 37950, 91900, 191650,  416700,  418400, Inf)
+}
+return(tax_calculator(taxable_income, bracket, rate))
+}
+```
+```{r, include=FALSE}
+#Return the new way of tax calculation
+new_tax<-function(taxable_income, joint = TRUE){ 
+rate= c(0.12, 0.25, 0.35, 0.396)
+if (joint){
+  bracket<-c(0, 90000, 260000, 1000000,Inf)
+}else{
+  bracket<-c(0, 45000, 200000, 500000,Inf)
+}
+return(tax_calculator(taxable_income, bracket, rate))
+}
+```
+#2 Remove AMT
+The Alternative Minimum Tax exemption amount for tax year 2017 is $54,300 ($84,500 for married couples filing jointly) and begins to phase out at $120,700 ($160,900 for married couples filing jointly). For tax year 2017, the 26 percent and 28 percent tax rate applies to taxpayers with taxable incomes lower and above $187,800.
+```{r, include=FALSE}
+AMT_tax<- function(taxable_income, joint=TRUE){
+if (joint){
+    amt=max(0, 84500 - max(taxable_income - 160900, 0)/4)
+  } else {
+    amt=max(0, 54300 - max(taxable_income - 120700, 0)/4)
+  }
+rate=c(0.26, 0.28)
+bracket=c(0, 187800,Inf)
+return(max(sum(diff(pmin(taxable_income-amt,bracket))*rate),0))
+}
+```
+#3 Remove Personal Exemption. 
+#4 Double Standard Deduction.
+#5 Cap Tax Deduction upto $10,000. Mortgage Interests Deduction upto $500,000 instead of $1,000,000.
+
+```{r, include=FALSE}
+
+MTG_IR_deduction_old<-function(loan_amount, interest_rate){
+  return(min(1000000, loan_amount)*interest_rate)
+}
+MTG_IR_deduction_new<-function(loan_amount, interest_rate,affected_status=TRUE){
+  if(affected_status)
+  {return(min(500000, loan_amount)*interest_rate)}
+  else{return(min(1000000, loan_amount)*interest_rate)}
+}
+
+tax_paying_deduction_old<-function(gross_income, efficient_state_rate, local_tax)
+  {return(gross_income*efficient_state_rate + local_tax)}
+
+tax_paying_deduction_new<-function(gross_income, efficient_state_rate, local_tax)
+{return(min(10000.0, gross_income*efficient_state_rate + local_tax))}
+
+PersonalExemption_deduction_old<-function(gross_income, child, joint = TRUE)
+{  if (joint)
+  {member=2+child
+  phaseout = min(0.02*round((max(gross_income - 311300, 0)/2500 + 1e-7)), 1)
+ return(4050*member*(1 - phaseout))}
+ else
+  {member=1+child
+    phaseout = min(0.02*round(max(gross_income - 259000, 0)/2500 + 1e-7), 1)
+return(4050*member*(1 - phaseout))}
+}
+PersonalExemption_deduction_new<-0
+
+ChildCare_Credit_old<-function(gross_income, child, joint = TRUE)
+  {if(joint)
+  {phaseout = round(max(gross_income - 110000, 0)/20)
+return(max(0,1000*child -  phaseout))
+}
+else
+  {phaseout = round(max(gross_income - 55000, 0)/20)
+return(max(0,1000*child -  phaseout))}
+}
+
+ChildCare_Credit_new<-function(gross_income, child, joint = TRUE)
+{ if(joint)
+  {
+  phaseout = round(max(gross_income - 230000, 0)/20)
+return(max(0,1600*child -  phaseout))
+}
+else{
+  phaseout = round(max(gross_income - 115000, 0)/20)
+return(max(0,1600*child -  phaseout))}
+}
+Standard_deduct_old<-function(joint = TRUE){ if(joint)
+  {
+return(12600)
+}
+else{
+return(6300)}
+}
+Standard_deduct_new<-function(joint = TRUE){ if(joint)
+  {
+return(24000)
+}
+else{
+return(12000)}
+}
+
+Itemized<-function(AGI,itemized_amt,joint = TRUE)
+{
+  if(joint){
+    item_deduct=itemized_amt-max(min((AGI-313800)*0.03, 0.8*itemized_amt),0)
+    return(item_deduct)
+  }
+  else{
+    item_deduct=itemized_amt-max(min((AGI-261500)*0.03, 0.8*itemized_amt),0)
+    return(item_deduct)
+  }
+}
+```
+
+```{r, echo=FALSE}
+
+inputPanel(
+  selectInput("joint1", label = "Married couples filing jointly?",
+              choices = c(TRUE, FALSE), selected = TRUE),
+  numericInput("state_rate", "State tax rate", 0.08, min = 0, max = 1),
+  numericInput("Loan_Amount", "Mortgage Amount", 1000000, min = 0, max = 10000000),
+  numericInput("interest_rate", "Loan Interest tax rate", 0.04, min = 0, max = 1),
+  numericInput("local_tax", "Property Tax Amount", 18000, min = 0, max = 10000000),
+  selectInput("child", label = "Number of Child",
+              choices = c(0,1,2,3,4,5), selected = 2),
+  sliderInput("income", label = "W2 Gross Income Range",
+              min = 0, max = 1000000, value = 500000, step = 100000),
+  numericInput("pre_tax_deduct", "  Qualified plan contributions", 18000, min = 0, max = 10000000),
+  numericInput("Salary", "Your Salary", 150000, min = 0, max = 10000000),
+  selectInput("affected_status", label = "Loan after Nov/02/2017?",choices = c(TRUE, FALSE), selected = TRUE)
+)
+```
+**Note here "Married couples filing jointly?" FALSE means filling as single**
+
+```{r, echo=FALSE}
+renderPlot({
+  gross_income=seq(0,input$income,by=500)
+len=length(gross_income)
+the_old_tax=the_new_tax=c()
+#joint1=TRUE
+child=as.numeric(input$child)
+#interest_rate=0.04
+#Loan_Amount=0
+#state_rate=0.08
+#pre_tax_deduct=0
+#local_tax=0
+for (i in 1:len){
+  standard_deduct_old=Standard_deduct_old(joint = input$joint1)
+  standard_deduct_new=Standard_deduct_new(joint = input$joint1)
+  childcare_credit_old=ChildCare_Credit_old(gross_income[i], child, joint = input$joint1)
+  childcare_credit_new=ChildCare_Credit_new(gross_income[i], child, joint = input$joint1)
+  AGI=gross_income[i]-input$pre_tax_deduct
+  Personal_exemptions_old=PersonalExemption_deduction_old(gross_income[i], child, joint = input$joint1)
+  Personal_exemptions_new=PersonalExemption_deduction_new
+  mortgage_deduction_old=MTG_IR_deduction_old(input$Loan_Amount, input$interest_rate)
+  mortgage_deduction_new=MTG_IR_deduction_new(input$Loan_Amount, input$interest_rate, input$affected_status)
+  tax_deduction_old=tax_paying_deduction_old(gross_income[i], input$state_rate, input$local_tax)
+  tax_deduction_new=tax_paying_deduction_new(gross_income[i], input$state_rate, input$local_tax)
+  itemized_deduction_old=tax_deduction_old+mortgage_deduction_old+Personal_exemptions_old
+  itemized_deduction_new=tax_deduction_new+mortgage_deduction_new+Personal_exemptions_new
+  itemized_deduction_old_revised=Itemized(AGI=AGI,itemized_deduction_old, input$joint1)
+  itemized_deduction_new_revised=Itemized(AGI=AGI,itemized_deduction_new, input$joint1)
+  taxable_income_old=AGI-max(standard_deduct_old, itemized_deduction_old_revised)
+  taxable_income_new=AGI-max(standard_deduct_new, itemized_deduction_new_revised)
+  taxable_income_amt=AGI-mortgage_deduction_old
+  tax_liability_before_credit_old_raw=old_tax(taxable_income_old,joint = input$joint1)
+  tax_liability_before_credit_amt=AMT_tax(taxable_income_amt,joint = input$joint1)
+  tax_liability_before_credit_old=max(tax_liability_before_credit_old_raw, tax_liability_before_credit_amt)
+  tax_liability_before_credit_new=new_tax(taxable_income_new,joint = input$joint1)
+  tax_liability_old=tax_liability_before_credit_old-childcare_credit_old
+  tax_liability_new=tax_liability_before_credit_new-childcare_credit_new
+  the_old_tax=c(the_old_tax,tax_liability_old)
+  the_new_tax=c(the_new_tax,tax_liability_new)
+}
+df_2 <- data.frame(GROSS=rep(gross_income, 2), tax=c(the_old_tax,the_new_tax), 
+                 variable=rep(c("old_tax", "new_tax"), each=len))
+  ggplot(data = df_2, aes(x=GROSS, y=tax)) + geom_line(aes(colour=variable))+ ggtitle("Plot new and old tax calulation.") +
+  xlab("Gross Income") + ylab("Tax Liable Amount")
+})
+
+```
+
+```{r, echo=FALSE}
+  renderPlot({
+      gross_income=seq(0,input$income,by=500)
+len=length(gross_income)
+the_old_tax=the_new_tax=c()
+#joint1=TRUE
+child=as.numeric(input$child)
+#interest_rate=0.04
+#Loan_Amount=0
+#state_rate=0.08
+#pre_tax_deduct=0
+#local_tax=0
+for (i in 1:len){
+  standard_deduct_old=Standard_deduct_old(joint = input$joint1)
+  standard_deduct_new=Standard_deduct_new(joint = input$joint1)
+  childcare_credit_old=ChildCare_Credit_old(gross_income[i], child, joint = input$joint1)
+  childcare_credit_new=ChildCare_Credit_new(gross_income[i], child, joint = input$joint1)
+  AGI=gross_income[i]-input$pre_tax_deduct
+  Personal_exemptions_old=PersonalExemption_deduction_old(gross_income[i], child, joint = input$joint1)
+  Personal_exemptions_new=PersonalExemption_deduction_new
+  mortgage_deduction_old=MTG_IR_deduction_old(input$Loan_Amount, input$interest_rate)
+  mortgage_deduction_new=MTG_IR_deduction_new(input$Loan_Amount, input$interest_rate, input$affected_status)
+  tax_deduction_old=tax_paying_deduction_old(gross_income[i], input$state_rate, input$local_tax)
+  tax_deduction_new=tax_paying_deduction_new(gross_income[i], input$state_rate, input$local_tax)
+  itemized_deduction_old=tax_deduction_old+mortgage_deduction_old+Personal_exemptions_old
+  itemized_deduction_new=tax_deduction_new+mortgage_deduction_new+Personal_exemptions_new
+  itemized_deduction_old_revised=Itemized(AGI=AGI,itemized_deduction_old, input$joint1)
+  itemized_deduction_new_revised=Itemized(AGI=AGI,itemized_deduction_new, input$joint1)
+  taxable_income_old=AGI-max(standard_deduct_old, itemized_deduction_old_revised)
+  taxable_income_new=AGI-max(standard_deduct_new, itemized_deduction_new_revised)
+  taxable_income_amt=AGI-mortgage_deduction_old
+  tax_liability_before_credit_old_raw=old_tax(taxable_income_old,joint = input$joint1)
+  tax_liability_before_credit_amt=AMT_tax(taxable_income_amt,joint = input$joint1)
+  tax_liability_before_credit_old=max(tax_liability_before_credit_old_raw, tax_liability_before_credit_amt)
+  tax_liability_before_credit_new=new_tax(taxable_income_new,joint = input$joint1)
+  tax_liability_old=tax_liability_before_credit_old-childcare_credit_old
+  tax_liability_new=tax_liability_before_credit_new-childcare_credit_new
+  the_old_tax=c(the_old_tax,tax_liability_old)
+  the_new_tax=c(the_new_tax,tax_liability_new)
+}
+    New_minus_Old=the_new_tax-the_old_tax
+    plot(x=gross_income, y=New_minus_Old, xlab="Gross Income", ylab="Tax difference New-Old", main='Plot the difference between new tax proposal and old tax')
+
+})
+```
+
+```{r, echo=FALSE}
+ renderText({
+gross_income=input$Salary
+#the_old_tax=the_new_tax=c()
+#joint1=TRUE
+  child=as.numeric(input$child)
+  standard_deduct_old=Standard_deduct_old(joint = input$joint1)
+  standard_deduct_new=Standard_deduct_new(joint = input$joint1)
+  childcare_credit_old=ChildCare_Credit_old(gross_income, child, joint = input$joint1)
+  childcare_credit_new=ChildCare_Credit_new(gross_income, child, joint = input$joint1)
+  AGI=gross_income-input$pre_tax_deduct
+  Personal_exemptions_old=PersonalExemption_deduction_old(gross_income, child, joint = input$joint1)
+  Personal_exemptions_new=PersonalExemption_deduction_new
+  mortgage_deduction_old=MTG_IR_deduction_old(input$Loan_Amount, input$interest_rate)
+  mortgage_deduction_new=MTG_IR_deduction_new(input$Loan_Amount, input$interest_rate, input$affected_status)
+  tax_deduction_old=tax_paying_deduction_old(gross_income, input$state_rate, input$local_tax)
+  tax_deduction_new=tax_paying_deduction_new(gross_income, input$state_rate, input$local_tax)
+  itemized_deduction_old=tax_deduction_old+mortgage_deduction_old+Personal_exemptions_old
+  itemized_deduction_new=tax_deduction_new+mortgage_deduction_new+Personal_exemptions_new
+  itemized_deduction_old_revised=Itemized(AGI=AGI,itemized_deduction_old, input$joint1)
+  itemized_deduction_new_revised=Itemized(AGI=AGI,itemized_deduction_new, input$joint1)
+  taxable_income_old=AGI-max(standard_deduct_old, itemized_deduction_old_revised)
+  taxable_income_new=AGI-max(standard_deduct_new, itemized_deduction_new_revised)
+  taxable_income_amt=AGI-mortgage_deduction_old
+  tax_liability_before_credit_old_raw=old_tax(taxable_income_old,joint = input$joint1)
+  tax_liability_before_credit_amt=AMT_tax(taxable_income_amt,joint = input$joint1)
+  tax_liability_before_credit_old=max(tax_liability_before_credit_old_raw, tax_liability_before_credit_amt)
+  tax_liability_before_credit_new=new_tax(taxable_income_new,joint = input$joint1)
+  tax_liability_old=tax_liability_before_credit_old-childcare_credit_old
+  tax_liability_new=tax_liability_before_credit_new-childcare_credit_new
+#  the_old_tax=c(the_old_tax,tax_liability_old)
+#  the_new_tax=c(the_new_tax,tax_liability_new)
+#    New_minus_Old=the_new_tax-the_old_tax
+str1=paste0("Old Standard Tax is ",tax_liability_before_credit_old_raw, ". ")
+str2=paste0("Old AMT Tax is ",tax_liability_before_credit_amt, ". ")
+str3=paste0("New Standard Tax is ",tax_liability_before_credit_new, ". ")
+str4=paste0("Old Taxable Income is ",taxable_income_old, ". ")
+str5=paste0("New Taxable Income is ",taxable_income_new, ". ")
+str6=paste0("Old Itemized Deduction is ",itemized_deduction_old_revised, ". ")
+str7=paste0("New Itemized Deduction is ",itemized_deduction_new_revised, ". ")
+
+HTML(paste(str1, str2, str3, str4,str5, str6,str7, sep='\n'))
+})
+```
+
+
+
